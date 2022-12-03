@@ -27,22 +27,6 @@ scale_fill_discrete = scale_fill_viridis_d
 theme_set(theme_minimal() + theme(legend.position = "bottom"))
 ```
 
-### Problem 0
-
-This "problem" focuses on structure of your assignment, including the use of R Markdown to write reproducible reports, the use of R Projects to organize your work, the use of relative paths to load data, and the naming structure for your files. 
-
-To that end: 
-
-* create a public GitHub repo + local R Project for this assignment
-* write solutions using a .Rmd file that outputs a `github_document` / .md file
-* submit a link to your repo via Courseworks
-
-Your solutions to Problems 1 and 2 should be implemented in your .Rmd file, and your git commit history should reflect the process you used to solve these Problems. 
-
-For Problem 0, we will assess adherence to the instructions above regarding repo structure, git commit history, and whether we are able to knit your .Rmd to ensure that your work is reproducible. Adherence to appropriate styling and clarity of code will be assessed in Problems 1+ using the homework [style rubric](homework_style_rubric.html). 
-
-This homework includes figures; the readability of your embedded plots (e.g. font sizes, axis labels, titles) will be assessed in Problems 1+.
-
 ```{r load_libraries}
 library(tidyverse)
 library(modelr)
@@ -104,4 +88,120 @@ As with $r^2$, this distribution is somewhat skewed and has some outliers.
 The point of this is not to say you should always use the bootstrap -- it's possible to establish "large sample" distributions for strange parameters / values / summaries in a lot of cases, and those are great to have. But it is helpful to know that there's a way to do inference even in tough cases. 
 
 ### Problem 2
+
+**Data Loading**
+
+Loading the data that the Washington Post gathered on homicides in 50 large U.S. cities.
+```{r}
+homicides = read_csv(file= "./data/homicide-data.csv") %>%
+janitor::clean_names()
+```
+
+
+**Data Cleaning**
+
+Create a `city_state` variable (e.g. “Baltimore, MD”), and a binary variable `solved` indicating whether the homicide is solved. 
+
+Omit cities Dallas, TX; Phoenix, AZ; and Kansas City, MO – these don’t report victim race. Also omit Tulsa, AL – this is a data entry mistake. 
+
+For this problem, limit your analysis those for whom `victim_race` is `white` or `black`. Be sure that `victim_age` is numeric.
+
+```{r}
+homicides_clean = 
+  homicides %>%
+  mutate(
+    state = replace(state, state== "wI", "WI"),
+    city_state= paste(city, state, sep= ","),
+    solved = as.numeric(disposition == "Closed by arrest"),
+    victim_age = as.numeric(victim_age)
+    ) %>% 
+  filter(
+    !city_state %in% c("Dallas,TX","Phoenix,AZ", "Kansas City,MO","Tulsa,AL"), 
+    victim_race %in% c("White","Black")
+    )
+```
+
+**Fitting GLM for Baltimore, MD**
+
+For the city of Baltimore, MD, use the `glm` function to fit a logistic regression with resolved vs unresolved as the outcome and victim age, sex and race as predictors. 
+
+Save the output of `glm` as an R object; apply the `broom::tidy` to this object; and obtain the estimate and confidence interval of the adjusted odds ratio for solving homicides comparing male victims to female victims keeping all other variables fixed.
+
+```{r}
+Baltimore_GLM = 
+  homicides_clean %>% 
+  filter(city_state == "Baltimore,MD") %>% 
+  glm(solved ~ victim_age + victim_race + victim_sex, data = ., family = binomial()) 
+
+Baltimore_GLM %>% 
+  broom::tidy() %>% 
+  mutate(OR = exp(estimate)) %>% 
+  select(term, OR, p.value) %>% 
+  knitr::kable(digits = 2) 
+
+CI = 
+  exp(confint(Baltimore_GLM, level= 0.95))
+```
+
+
+The adjusted odds ratio is 0.43 for solving homicides comparing male victims to female victims keeping all other variables fixed, and the confidence interval is (0.32, 0.56). 
+
+On average, the odds of resolving homicides in which the victim is Male are 0.43 times of that in which the victim is female, keeping all other variables fixed.
+
+
+**Fitting GLM for all cities**
+
+Now run `glm` for each of the cities in your dataset, and extract the adjusted odds ratio (and CI) for solving homicides comparing male victims to female victims. 
+Do this within a “tidy” pipeline, making use of `purrr::map`, list columns, and `unnest` as necessary to create a dataframe with estimated ORs and CIs for each city.
+
+```{r}
+all_GLM = 
+  homicides_clean %>% 
+  nest(data = -city_state) %>% 
+  mutate(
+    model_output = map(data, 
+                       ~glm(solved ~ victim_age + victim_race + victim_sex, data = ., 
+                            family = binomial())),
+    results = purrr::map(model_output, broom::tidy, conf.int = TRUE)
+  ) %>% 
+  select(city_state, results) %>% 
+  unnest(cols = results) %>% 
+  filter(term== "victim_sexMale") %>% 
+  mutate(OR = exp(estimate),
+         conf.low = exp(conf.low),
+         conf.high = exp(conf.high)) %>% 
+  select(city_state, term, OR, conf.low, conf.high)
+```
+
+
+**Plotting**
+
+Create a plot that shows the estimated ORs and CIs for each city. Organize cities according to estimated OR, and comment on the plot.
+
+```{r}
+ggplot(
+  all_GLM %>% 
+    mutate(city_state= fct_reorder(city_state, OR)), 
+  aes(x= city_state, y= OR, color=city_state)
+  )+
+  geom_point()+
+  geom_errorbar(aes(ymin=conf.low, ymax= conf.high))+
+  theme_classic()+ 
+  theme(legend.position= "none")+
+  theme(plot.title = element_text(hjust= 0.5, size=12),
+        axis.text.x.bottom = element_text(size= 8, angle= 90))+
+    labs(x = "City",
+         y= "Odds Ratio",
+         title = "OR and 95%CIs of Resolved Homicide Cases in Large US Cities, Comparing Males to Females")
+```
+
+The plot shows estimated OR with 95% confidence interval of resolved homicides, comparing male victims and female victims, for the 50 largest cities in the US, in the order of lowest to highest OR.
+
+* `New York, NY` has the lowest OR with a relatively narrow 95% CI for resolved cases of male victims compared to female victims. 
+
+* `Albuquerque,NM` has the highest OR with a relatively wide 95% CI for resolved cases of male victims compared to female victims. 
+
+
+
+### Problem 3
 
